@@ -40,7 +40,7 @@ def bgr_to_rgb_chw(img_bgr):
     img_chw = np.transpose(img_rgb, (2, 0, 1))
     return img_chw
 
-class YOLO():
+class DFINE():
     def __init__(self, onnx_path):
         self.onnx_session = onnxruntime.InferenceSession(onnx_path)
         self.input_name = self.get_input_name()
@@ -194,7 +194,7 @@ def draw(image, detections):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
 if __name__ == "__main__":
-    model = YOLO('runs/custom-yolov11s/weights/best.onnx')
+    model = DFINE('./output/dfine_hgnetv2_s_custom/best_stg1.onnx')
     img_paths = ['test.jpg', 'test.jpg']
     outputs, letterbox_imgs, ratios, pads = model.inference(img_paths)
     # ultralytics输出格式和旧版本的不一样，ultralytics去掉了目标框置信度，把目标框置信度和类别置信度融合到一起了

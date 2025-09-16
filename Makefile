@@ -1,4 +1,4 @@
-# Makefile for yolo_trt_inference
+# Makefile for dfine_trt_inference
 CXX := g++
 CXXFLAGS := -g -std=c++17 \
             -I/data/sunkx/TensorRT-8.5.1.7/include \
@@ -16,8 +16,8 @@ LDLIBS := -lnvinfer -lcudart \
 		  -lnppig -lnppidei -lnppial
 
 
-TARGET := yolo_trt_inference
-SRC := yolo_trt_inference.cpp
+TARGET := dfine_trt_inference
+SRC := dfine_trt_inference.cpp
 
 
 all: $(TARGET)
