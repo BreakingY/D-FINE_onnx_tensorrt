@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['dog', 'person']
+
+roboflow:
+  workspace: joseph-nelson
+  project: thermal-dogs-and-people
+  version: 1
+  license: Public Domain
+  url: https://universe.roboflow.com/joseph-nelson/thermal-dogs-and-people/dataset/1
