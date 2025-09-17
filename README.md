@@ -37,6 +37,7 @@ __include__: [
 * * * train_dataloader->ann_file: PATH/D-FINE_onnx_tensorrt/dataset/train/annotations/train.json
 * * * val_dataloader->img_folder: PATH/D-FINE_onnx_tensorrt/dataset/valid/images
 * * * val_dataloader->ann_file: PATH/D-FINE_onnx_tensorrt/dataset/valid/annotations/valid.json
+* * * Modify PATH to your actual path
 * * vim configs/runtime.yml
 * * * Keep the default
 * * vim configs/dfine/include/dataloader.yml
