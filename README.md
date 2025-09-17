@@ -49,7 +49,7 @@ __include__: [
 * * export model=s  # n s m l x
 * * CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/dfine/custom/dfine_hgnetv2_s_custom.yml --use-amp --seed=0
 
-# ONNX TODO
+# ONNX
 * python tools/deployment/export_onnx.py --check -c configs/dfine/custom/dfine_hgnetv2_s_custom.yml -r ./output/dfine_hgnetv2_s_custom/best_stg1.pth
 * python dfine_onnx_inference.py
 

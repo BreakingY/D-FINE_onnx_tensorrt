@@ -45,6 +45,12 @@ class DFINE():
         self.onnx_session = onnxruntime.InferenceSession(onnx_path)
         self.input_name = self.get_input_name()
         self.output_name = self.get_output_name()
+        print("input:")
+        for i in self.input_name:
+            print(i)
+        print("output:")
+        for i in self.output_name:
+            print(i)
 
     def get_input_name(self):
         return [node.name for node in self.onnx_session.get_inputs()]
@@ -52,14 +58,16 @@ class DFINE():
     def get_output_name(self):
         return [node.name for node in self.onnx_session.get_outputs()]
 
-    def get_input_feed(self, img_tensor):
-        return {self.input_name[0]: img_tensor}
+    def get_input_feed(self, img_tensor, orig_target_sizes):
+        return {self.input_name[0]: img_tensor, self.input_name[1]: orig_target_sizes}
+
 
     def inference(self, img_list):
         processed_imgs = []
         original_imgs = []
         ratios = []
         pads = []
+        orig_sizes = []
 
         for path in img_list:
             img = cv2.imread(path)
@@ -70,12 +78,11 @@ class DFINE():
             img = bgr_to_rgb_chw(or_img)
             img = img.astype(np.float32) / 255.0
             processed_imgs.append(img)
+            orig_sizes.append([input_h, input_w])
 
         batch_input = np.stack(processed_imgs, axis=0)
-        input_feed = self.get_input_feed(batch_input)
-        preds = self.onnx_session.run(None, input_feed)[0]
-
-        print(f"ONNX model output shape: {preds.shape}")
+        input_feed = self.get_input_feed(batch_input, orig_sizes)
+        preds = self.onnx_session.run(None, input_feed)
 
         return preds, original_imgs, ratios, pads
 
@@ -129,32 +136,20 @@ def nms(dets, thresh):
         index = index[idx + 1]
     return keep
 
-def filter_box(output, conf_thres=0.5, iou_thres=0.5, output_format='CN'):
+def filter_box(output, conf_thres=0.5, iou_thres=0.5):
     """
-        np.ndarray，过滤后的框，格式 [x1, y1, x2, y2, conf, cls_id]
+        output:label-300, boxes-300*4, scores-300
+        return:[x1, y1, x2, y2, conf, cls_id]
     """
-    if output_format == 'CN':
-        dets = output.T  # 转为 (N, C+4)
-    elif output_format == 'NC':
-        dets = output
-    else:
-        raise ValueError(f"Unsupported output_format: {output_format}")
 
     boxes_with_scores = []
-    for det in dets:
-        x_c, y_c, w, h = det[:4]
-        class_scores = det[4:]
-        cls_id = np.argmax(class_scores)
-        conf = class_scores[cls_id]
-
-        if conf < conf_thres:
+    labels, boxes, scores = output
+    for i in range(len(labels)):
+        label_i, boxes_i, scores_i = labels[i], boxes[i], scores[i]
+        if scores_i < conf_thres:
             continue
-        x1 = x_c - w / 2
-        y1 = y_c - h / 2
-        x2 = x_c + w / 2
-        y2 = y_c + h / 2
-        
-        boxes_with_scores.append([x1, y1, x2, y2, conf, int(cls_id)])
+        x1, y1, x2, y2 = boxes_i[:4]
+        boxes_with_scores.append([x1, y1, x2, y2, scores_i, int(label_i)])
 
     if len(boxes_with_scores) == 0:
         return np.array([])
@@ -194,20 +189,16 @@ def draw(image, detections):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
 if __name__ == "__main__":
-    model = DFINE('./output/dfine_hgnetv2_s_custom/best_stg1.onnx')
+    model = DFINE('./D-FINE/output/dfine_hgnetv2_s_custom/best_stg1.onnx')
     img_paths = ['test.jpg', 'test.jpg']
     outputs, letterbox_imgs, ratios, pads = model.inference(img_paths)
-    # ultralytics输出格式和旧版本的不一样，ultralytics去掉了目标框置信度，把目标框置信度和类别置信度融合到一起了
-    # 设置模型输出格式：
-    # C表示类别格式
-    # ultralytics ONNX一般是 '4+C N' (4 + C行，N列)
-    # ultralytics/YOLOv5 旧项目中的yolov5是 'N C+4' (N行，C+4列)
-    output_format = 'CN' if outputs.shape[1] == 4 + len(class_names) else 'NC'  
-    print(outputs.shape[1], output_format)
+    
 
-    for i, (output, img_path, r, (dw, dh)) in enumerate(zip(outputs, img_paths, ratios, pads)):
+    print(outputs[0].shape, outputs[1].shape, outputs[2].shape)
+
+    for i, (label, box, score, img_path, r, (dw, dh)) in enumerate(zip(outputs[0], outputs[1], outputs[2], img_paths, ratios, pads)):
         raw_img = cv2.imread(img_path)
-        detections = filter_box(output, conf_thres=0.5, iou_thres=0.5, output_format=output_format)
+        detections = filter_box([label, box, score], conf_thres=0.5, iou_thres=0.5)
         if detections.shape[0] > 0:
             detections = scale_coords(detections, r, dw, dh, raw_img.shape[:2])
             draw(raw_img, detections)
