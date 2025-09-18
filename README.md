@@ -51,11 +51,14 @@ __include__: [
 * * CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/dfine/custom/dfine_hgnetv2_s_custom.yml --use-amp --seed=0
 
 # ONNX
+* cd PATH/DFINE-onnx-tensorrt/D-FINE 
 * python tools/deployment/export_onnx.py --check -c configs/dfine/custom/dfine_hgnetv2_s_custom.yml -r ./output/dfine_hgnetv2_s_custom/best_stg1.pth
+* cd PATH/DFINE-onnx-tensorrt
 * python dfine_onnx_inference.py
 
-# TensorRT TODO
-* /data/sunkx/TensorRT-8.5.1.7/bin/trtexec --onnx=./output/dfine_hgnetv2_s_custom/best_stg1.onnx --minShapes=images:1x3x640x640 --optShapes=images:4x3x640x640 --maxShapes=images:4x3x640x640 --saveEngine=best.engine --fp16
+# TensorRT (There is a bug to be fixed.)
+* cd PATH/DFINE-onnx-tensorrt
+* /data/sunkx/TensorRT-10.4.0.26/bin/trtexec --onnx=./D-FINE/output/dfine_hgnetv2_s_custom/best_stg1.onnx --minShapes=images:1x3x640x640 --optShapes=images:4x3x640x640 --maxShapes=images:4x3x640x640 --saveEngine=best.engine --fp16
 * make
 * ./dfine_trt_inference ./best.engine ./test.jpg
 
