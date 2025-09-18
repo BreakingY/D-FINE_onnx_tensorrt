@@ -785,7 +785,7 @@ static std::vector<Detection> PostprocessDetections(
         float y1 = feat_boxes[i * walk + 1];
         float x2 = feat_boxes[i * walk + 2];
         float y2 = feat_boxes[i * walk + 3];
-        std::cout << "label:" << label << " scores:" << scores << " x1:" << x1 << " y1:" << y1 << " x2:" << x2 << " y2:" << y2 << std::endl;
+        // std::cout << "label:" << label << " scores:" << scores << " x1:" << x1 << " y1:" << y1 << " x2:" << x2 << " y2:" << y2 << std::endl;
         if(scores < conf_thres){
             continue;
         }
