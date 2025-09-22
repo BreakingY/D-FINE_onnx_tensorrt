@@ -921,8 +921,9 @@ int main(int argc, char **argv){
         res_pre.push_back(res);
         
     }
-    float img_size[2] = {(float)input_h, (float)input_w};
-    CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(float) * 2, cudaMemcpyHostToDevice, stream));
+    // must be int64_t
+    int64_t img_size[2] = {(int64_t)input_h, (int64_t)input_w};
+    CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int64_t) * 2, cudaMemcpyHostToDevice, stream));
     Inference(context, engine, in_tensor_info, out_tensor_info, buffers, (void**)host_outs,
               res_pre.size(), channel, input_h, input_w, max_out0_size_byte, max_out1_size_byte, max_out2_size_byte, stream);
     cv::Mat original = cv::imread(img_path);
