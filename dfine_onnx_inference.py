@@ -155,6 +155,7 @@ def filter_box(output, conf_thres=0.5, iou_thres=0.5):
         return np.array([])
 
     boxes_with_scores = np.array(boxes_with_scores)
+    '''
     detections = []
     unique_classes = np.unique(boxes_with_scores[:, 5].astype(int))
 
@@ -163,8 +164,9 @@ def filter_box(output, conf_thres=0.5, iou_thres=0.5):
         cls_boxes = boxes_with_scores[cls_mask]
         keep = nms(cls_boxes, iou_thres)
         detections.extend(cls_boxes[keep])
-
     return np.array(detections)
+    '''
+    return boxes_with_scores
 
 def scale_coords(coords, r, dw, dh, original_shape):
     coords[:, [0, 2]] -= dw
@@ -202,4 +204,4 @@ if __name__ == "__main__":
         if detections.shape[0] > 0:
             detections = scale_coords(detections, r, dw, dh, raw_img.shape[:2])
             draw(raw_img, detections)
-        cv2.imwrite(f'result_{i+1}.jpg', raw_img)
+        cv2.imwrite(f'result_{i}.jpg', raw_img)

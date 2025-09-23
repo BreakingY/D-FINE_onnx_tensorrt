@@ -233,7 +233,7 @@ int Inference(nvinfer1::IExecutionContext* context, void**buffers, void* output_
         return -2;
     }
     CUDA_CHECK(cudaMemcpyAsync(output_scores, buffers[output_index_score], batch_size * scores_output_len * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaMemcpyAsync(output_labels, buffers[output_index_label], batch_size * label_output_len * sizeof(float), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(output_labels, buffers[output_index_label], batch_size * label_output_len * sizeof(int64_t), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaMemcpyAsync(output_boxes, buffers[output_index_boxes], batch_size * boxes_output_len * sizeof(float), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     return 0;
@@ -317,11 +317,12 @@ static std::vector<Detection> PostprocessDetections(
         dets.push_back(d);
     }
     // NMS
-    std::vector<int> keep = NMS(dets, iou_thres);
-    std::vector<Detection> out;
-    out.reserve(keep.size());
-    for (int idx : keep) out.push_back(dets[idx]);
-    return out;
+    // std::vector<int> keep = NMS(dets, iou_thres);
+    // std::vector<Detection> out;
+    // out.reserve(keep.size());
+    // for (int idx : keep) out.push_back(dets[idx]);
+    // return out;
+    return dets;
 }
 int main(int argc, char **argv){
     if(argc < 3){
@@ -396,18 +397,18 @@ int main(int argc, char **argv){
     // images
     CUDA_CHECK(cudaMalloc(&buffers[input_index_images], batch_size * input_h * input_w * 3 * sizeof(float)));
     // orig_target_sizes
-    CUDA_CHECK(cudaMalloc(&buffers[input_index_size], batch_size * 2 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&buffers[input_index_size], batch_size * 2 * sizeof(int64_t)));
     // scores n*300
     int scores_output_len = score_num;
 	CUDA_CHECK(cudaMalloc(&buffers[output_index_score], batch_size * scores_output_len * sizeof(float)));
     // labels n*300
     int label_output_len = label_num;
-	CUDA_CHECK(cudaMalloc(&buffers[output_index_label], batch_size * label_output_len * sizeof(float)));
+	CUDA_CHECK(cudaMalloc(&buffers[output_index_label], batch_size * label_output_len * sizeof(int64_t)));
     // boxes n*300*4
     int boxes_output_len = boxes_num * boxes_loc_num;
 	CUDA_CHECK(cudaMalloc(&buffers[output_index_boxes], batch_size * boxes_output_len * sizeof(float)));
 
-    float* output_labels = new float[batch_size * label_output_len];
+    int64_t* output_labels = new int64_t[batch_size * label_output_len];
     float* output_boxes = new float[batch_size * boxes_output_len];
     float* output_scores = new float[batch_size * scores_output_len];
     int test_batch = 2;
@@ -424,8 +425,8 @@ int main(int argc, char **argv){
         buffer_idx += input_h * input_w * 3 * sizeof(float);
         res_pre.push_back(res);
     }   
-    float img_size[2] = {(float)input_h, (float)input_w};
-    CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(float) * 2, cudaMemcpyHostToDevice, stream)); 
+    int64_t img_size[2] = {(int64_t)input_h, (int64_t)input_w};
+    CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int64_t) * 2, cudaMemcpyHostToDevice, stream)); 
     Inference(context, buffers, (void*)output_labels, (void*)output_boxes, (void*)output_scores, label_output_len, boxes_output_len, scores_output_len,
               res_pre.size(), channel, input_h, input_w, input_index_images, input_index_size, output_index_score, output_index_label, output_index_boxes, stream);
     cv::Mat original = cv::imread(img_path);
@@ -433,7 +434,7 @@ int main(int argc, char **argv){
 
     for (int b = 0; b < test_batch; ++b) {
         auto [r, dw, dh] = res_pre[b];
-        float* feat_labels = output_labels + b * label_output_len;
+        int64_t* feat_labels = output_labels + b * label_output_len;
         float* feat_boxes = output_boxes + b * boxes_output_len;
         float* feat_scores = output_scores + b * scores_output_len;
 
@@ -813,11 +814,12 @@ static std::vector<Detection> PostprocessDetections(
         dets.push_back(d);
     }
     // NMS
-    std::vector<int> keep = NMS(dets, iou_thres);
-    std::vector<Detection> out;
-    out.reserve(keep.size());
-    for (int idx : keep) out.push_back(dets[idx]);
-    return out;
+    // std::vector<int> keep = NMS(dets, iou_thres);
+    // std::vector<Detection> out;
+    // out.reserve(keep.size());
+    // for (int idx : keep) out.push_back(dets[idx]);
+    // return out;
+    return dets;
 }
 size_t CountElement(const nvinfer1::Dims &dims, int batch_zise)
 {
