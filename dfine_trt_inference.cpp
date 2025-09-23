@@ -1,5 +1,6 @@
 #if 0
 // old API
+// test version TensorRT-8.5.1.7
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -473,6 +474,7 @@ int main(int argc, char **argv){
 }
 #endif
 // new API
+// test version TensorRT-10.4.0.26
 #include <fstream>
 #include <iostream>
 #include <sstream>
