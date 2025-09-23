@@ -10,6 +10,7 @@
 #include <cstring>
 #include <tuple>
 #include <cmath>
+#include <thread>
 #include <opencv2/opencv.hpp>
 #include <npp.h>
 #include "NvInfer.h"
@@ -501,8 +502,15 @@ int main(int argc, char **argv){
     }   
     int32_t img_size[2] = {(int32_t)input_h, (int32_t)input_w};
     CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int32_t) * 2, cudaMemcpyHostToDevice, stream)); 
-    Inference(context, buffers, (void*)output_labels, (void*)output_boxes, (void*)output_scores, label_output_len, boxes_output_len, scores_output_len,
-              res_pre.size(), channel, input_h, input_w, input_index_images, input_index_size, output_index_score, output_index_label, output_index_boxes, stream);
+    int fps_test_cnt = 10000;
+    auto start = std::chrono::high_resolution_clock::now();
+    for(int i = 0; i < fps_test_cnt; i++){
+        Inference(context, buffers, (void*)output_labels, (void*)output_boxes, (void*)output_scores, label_output_len, boxes_output_len, scores_output_len,
+                res_pre.size(), channel, input_h, input_w, input_index_images, input_index_size, output_index_score, output_index_label, output_index_boxes, stream);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    long long duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "fps: " << (double)(fps_test_cnt * test_batch) / ((double)duration / 1000) << " time: " << duration << "ms" << std::endl;
     cv::Mat original = cv::imread(img_path);
     int orig_h = original.rows, orig_w = original.cols;
 
@@ -557,6 +565,7 @@ int main(int argc, char **argv){
 #include <cstring>
 #include <tuple>
 #include <cmath>
+#include <thread>
 #include <opencv2/opencv.hpp>
 #include <npp.h>
 #include "NvInfer.h"
@@ -1021,8 +1030,15 @@ int main(int argc, char **argv){
     // must be int64_t
     int64_t img_size[2] = {(int64_t)input_h, (int64_t)input_w};
     CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int64_t) * 2, cudaMemcpyHostToDevice, stream));
-    Inference(context, engine, in_tensor_info, out_tensor_info, buffers, (void**)host_outs,
+    int fps_test_cnt = 10000;
+    auto start = std::chrono::high_resolution_clock::now();
+    for(int i = 0; i < fps_test_cnt; i++){
+        Inference(context, engine, in_tensor_info, out_tensor_info, buffers, (void**)host_outs,
               res_pre.size(), channel, input_h, input_w, max_out0_size_byte, max_out1_size_byte, max_out2_size_byte, stream);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    long long duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "fps: " << (double)(fps_test_cnt * test_batch) / ((double)duration / 1000) << " time: " << duration << "ms" << std::endl;
     cv::Mat original = cv::imread(img_path);
     int orig_h = original.rows, orig_w = original.cols;
     int64_t  *output_labels = reinterpret_cast<int64_t  *>(host_outs[0]);
