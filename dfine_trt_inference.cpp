@@ -229,12 +229,13 @@ std::tuple<float, float, float>  PreprocessImage_GPU(std::string path, void *buf
 int Inference(nvinfer1::IExecutionContext* context, void**buffers, void* output_labels, void* output_boxes, void* output_scores, int label_output_len, int boxes_output_len, int scores_output_len,
               const int batch_size, int channel, int input_h, int input_w, int input_index_images, int input_index_size, int output_index_score, int output_index_label, int output_index_boxes, cudaStream_t stream){
     context->setBindingDimensions(0, nvinfer1::Dims4(batch_size, channel, input_h, input_w));
+    context->setBindingDimensions(1, nvinfer1::Dims2(1, 2));
     if(!context->enqueueV2(buffers, stream, nullptr)) {
         std::cerr << "enqueueV2 failed!" << std::endl;
         return -2;
     }
     CUDA_CHECK(cudaMemcpyAsync(output_scores, buffers[output_index_score], batch_size * scores_output_len * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaMemcpyAsync(output_labels, buffers[output_index_label], batch_size * label_output_len * sizeof(int64_t), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(output_labels, buffers[output_index_label], batch_size * label_output_len * sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaMemcpyAsync(output_boxes, buffers[output_index_boxes], batch_size * boxes_output_len * sizeof(float), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     return 0;
@@ -272,7 +273,7 @@ static std::vector<int> NMS(const std::vector<Detection>& dets, float iou_thres)
     return keep;
 }
 static std::vector<Detection> PostprocessDetections(
-    const float* feat_labels, const float* feat_boxes, const float* feat_scores,
+    const int32_t * feat_labels, const float* feat_boxes, const float* feat_scores,
     int output_num,
     float r, float dw, float dh,    // 反 letterbox 参数
     int orig_w, int orig_h,         // 原图大小
@@ -282,15 +283,27 @@ static std::vector<Detection> PostprocessDetections(
     int num_classes = (int)(sizeof(class_names)/sizeof(class_names[0]));
     std::vector<Detection> dets;
     dets.reserve(512);
-    int box_pos = 0;
+    int walk = 4;
+    // for(int i = 0; i < 300*4;i++){
+    //     std::cout << feat_boxes[i];
+    // }
+    // printf("\n");
+    // for(int i = 0; i < 300;i++){
+    //     std::cout << feat_labels[i];
+    // }
+    // printf("\n");
+    // for(int i = 0; i < 300;i++){
+    //     std::cout << feat_scores[i];
+    // }
+    // printf("\n");
     for(int i = 0; i < output_num; i++){
-        float label = feat_labels[i];
+        int label = static_cast<int>(feat_labels[i]);
         float scores = feat_scores[i];
-        float x1 = feat_boxes[box_pos];
-        float y1 = feat_boxes[box_pos + 1];
-        float x2 = feat_boxes[box_pos + 2];
-        float y2 = feat_boxes[box_pos + 3];
-        box_pos += 4;
+        float x1 = feat_boxes[i * walk];
+        float y1 = feat_boxes[i * walk + 1];
+        float x2 = feat_boxes[i * walk + 2];
+        float y2 = feat_boxes[i * walk + 3];
+        // std::cout << "label:" << label << " scores:" << scores << " x1:" << x1 << " y1:" << y1 << " x2:" << x2 << " y2:" << y2 << std::endl;
         if(scores < conf_thres){
             continue;
         }
@@ -394,22 +407,82 @@ int main(int argc, char **argv){
     std::cout << "boxes_num:" << boxes_num << " boxes_loc_num:" << boxes_loc_num << std::endl;
     std::cout << "score_num:" << score_num << std::endl;
 
+    nvinfer1::DataType images_type = engine->getBindingDataType(input_index_images);
+    if (images_type == nvinfer1::DataType::kINT32) {
+        std::cout << "images 类型为 int32" << std::endl;
+    } 
+    // 8.5.1.7 have not kINT64
+    // else if (images_type == nvinfer1::DataType::kINT64) {
+    //     std::cout << "images 类型为 int64" << std::endl;
+    // } 
+    else if (images_type == nvinfer1::DataType::kFLOAT) {
+        std::cout << "images 类型为 float" << std::endl;
+    }
+
+    nvinfer1::DataType size_type = engine->getBindingDataType(input_index_size);
+    if (size_type == nvinfer1::DataType::kINT32) {
+        std::cout << "orig_target_sizes 类型为 int32" << std::endl;
+    } 
+    // 8.5.1.7 have not kINT64
+    // else if (size_type == nvinfer1::DataType::kINT64) {
+    //     std::cout << "orig_target_sizes 类型为 int64" << std::endl;
+    // } 
+    else if (size_type == nvinfer1::DataType::kFLOAT) {
+        std::cout << "orig_target_sizes 类型为 float" << std::endl;
+    }
+
+    nvinfer1::DataType label_type = engine->getBindingDataType(output_index_label);
+    if (label_type == nvinfer1::DataType::kINT32) {
+        std::cout << "labels 类型为 int32" << std::endl;
+    } 
+    // 8.5.1.7 have not kINT64
+    // else if (label_type == nvinfer1::DataType::kINT64) {
+    //     std::cout << "labels 类型为 int64" << std::endl;
+    // } 
+    else if (label_type == nvinfer1::DataType::kFLOAT) {
+        std::cout << "labels 类型为 float" << std::endl;
+    }
+
+    nvinfer1::DataType box_type = engine->getBindingDataType(output_index_boxes);
+    if (box_type == nvinfer1::DataType::kINT32) {
+        std::cout << "boxes 类型为 int32" << std::endl;
+    } 
+    // 8.5.1.7 have not kINT64
+    // else if (box_type == nvinfer1::DataType::kINT64) {
+    //     std::cout << "boxes 类型为 int64" << std::endl;
+    // } 
+    else if (box_type == nvinfer1::DataType::kFLOAT) {
+        std::cout << "boxes 类型为 float" << std::endl;
+    }
+
+    nvinfer1::DataType score_type = engine->getBindingDataType(output_index_score);
+    if (score_type == nvinfer1::DataType::kINT32) {
+        std::cout << "scores 类型为 int32" << std::endl;
+    } 
+    // 8.5.1.7 have not kINT64
+    // else if (score_type == nvinfer1::DataType::kINT64) {
+    //     std::cout << "scores 类型为 int64" << std::endl;
+    // } 
+    else if (score_type == nvinfer1::DataType::kFLOAT) {
+        std::cout << "scores 类型为 float" << std::endl;
+    }
+
     void* buffers[5] = {NULL, NULL, NULL, NULL, NULL};
     // images
     CUDA_CHECK(cudaMalloc(&buffers[input_index_images], batch_size * input_h * input_w * 3 * sizeof(float)));
     // orig_target_sizes
-    CUDA_CHECK(cudaMalloc(&buffers[input_index_size], batch_size * 2 * sizeof(int64_t)));
+    CUDA_CHECK(cudaMalloc(&buffers[input_index_size], batch_size * 2 * sizeof(int32_t)));
     // scores n*300
     int scores_output_len = score_num;
 	CUDA_CHECK(cudaMalloc(&buffers[output_index_score], batch_size * scores_output_len * sizeof(float)));
     // labels n*300
     int label_output_len = label_num;
-	CUDA_CHECK(cudaMalloc(&buffers[output_index_label], batch_size * label_output_len * sizeof(int64_t)));
+	CUDA_CHECK(cudaMalloc(&buffers[output_index_label], batch_size * label_output_len * sizeof(int32_t)));
     // boxes n*300*4
     int boxes_output_len = boxes_num * boxes_loc_num;
 	CUDA_CHECK(cudaMalloc(&buffers[output_index_boxes], batch_size * boxes_output_len * sizeof(float)));
 
-    int64_t* output_labels = new int64_t[batch_size * label_output_len];
+    int32_t* output_labels = new int32_t[batch_size * label_output_len];
     float* output_boxes = new float[batch_size * boxes_output_len];
     float* output_scores = new float[batch_size * scores_output_len];
     int test_batch = 2;
@@ -426,8 +499,8 @@ int main(int argc, char **argv){
         buffer_idx += input_h * input_w * 3 * sizeof(float);
         res_pre.push_back(res);
     }   
-    int64_t img_size[2] = {(int64_t)input_h, (int64_t)input_w};
-    CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int64_t) * 2, cudaMemcpyHostToDevice, stream)); 
+    int32_t img_size[2] = {(int32_t)input_h, (int32_t)input_w};
+    CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int32_t) * 2, cudaMemcpyHostToDevice, stream)); 
     Inference(context, buffers, (void*)output_labels, (void*)output_boxes, (void*)output_scores, label_output_len, boxes_output_len, scores_output_len,
               res_pre.size(), channel, input_h, input_w, input_index_images, input_index_size, output_index_score, output_index_label, output_index_boxes, stream);
     cv::Mat original = cv::imread(img_path);
@@ -435,7 +508,7 @@ int main(int argc, char **argv){
 
     for (int b = 0; b < test_batch; ++b) {
         auto [r, dw, dh] = res_pre[b];
-        int64_t* feat_labels = output_labels + b * label_output_len;
+        int32_t* feat_labels = output_labels + b * label_output_len;
         float* feat_boxes = output_boxes + b * boxes_output_len;
         float* feat_scores = output_scores + b * scores_output_len;
 
@@ -472,7 +545,7 @@ int main(int argc, char **argv){
     engine->destroy();
     return 0;
 }
-#endif
+#else
 // new API
 // test version TensorRT-10.4.0.26
 #include <fstream>
@@ -873,6 +946,16 @@ int main(int argc, char **argv){
         for(int i = 0; i < in_dims.nbDims; i++){
             std::cout << "dims [" << i << "]: " << in_dims.d[i] << std::endl;
         }
+        nvinfer1::DataType size_type = engine->getTensorDataType(in_tensor_info[idx].second.c_str());
+        if (size_type == nvinfer1::DataType::kINT32) {
+            std::cout << "类型为 int32" << std::endl;
+        } 
+        else if (size_type == nvinfer1::DataType::kINT64) {
+            std::cout << "类型为 int64" << std::endl;
+        } 
+        else if (size_type == nvinfer1::DataType::kFLOAT) {
+            std::cout << "类型为 float" << std::endl;
+        }
         std::cout << std::endl;
     }
     for(int idx = 0; idx < out_tensor_info.size(); idx++){
@@ -880,6 +963,16 @@ int main(int argc, char **argv){
         std::cout << "output: " << out_tensor_info[idx].second.c_str() << std::endl;
         for(int i = 0; i < out_dims.nbDims; i++){
             std::cout << "dims [" << i << "]: " << out_dims.d[i] << std::endl;
+        }
+        nvinfer1::DataType size_type = engine->getTensorDataType(out_tensor_info[idx].second.c_str());
+        if (size_type == nvinfer1::DataType::kINT32) {
+            std::cout << "类型为 int32" << std::endl;
+        } 
+        else if (size_type == nvinfer1::DataType::kINT64) {
+            std::cout << "类型为 int64" << std::endl;
+        } 
+        else if (size_type == nvinfer1::DataType::kFLOAT) {
+            std::cout << "类型为 float" << std::endl;
         }
         std::cout << std::endl;
     }
@@ -972,3 +1065,4 @@ int main(int argc, char **argv){
     delete []host_outs[2];
     return 0;
 }
+#endif
