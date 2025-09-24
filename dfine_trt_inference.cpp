@@ -1012,11 +1012,12 @@ int main(int argc, char **argv){
     int test_batch = 2;
     std::vector<std::tuple<float, float, float>> res_pre;
     int buffer_idx = 0;
-    char* input_ptr_images = static_cast<char*>(buffers[0]);
-    char* input_ptr_orig_target_sizes = static_cast<char*>(buffers[1]);
-    int channel = 3;
-    int input_h = 640;
-    int input_w = 640;
+    char* input_ptr_images = static_cast<char*>(buffers[in_tensor_info[0].first]);
+    char* input_ptr_orig_target_sizes = static_cast<char*>(buffers[in_tensor_info[1].first]);
+    nvinfer1::Dims in_dims = context->getTensorShape(in_tensor_info[0].second.c_str());
+    int channel = in_dims.d[1];
+    int input_h = in_dims.d[2];
+    int input_w = in_dims.d[3];
     for(int i = 0; i < test_batch; i++){
 #ifdef PROC_GPU
         std::tuple<float, float, float> res = PreprocessImage_GPU(img_path, input_ptr_images + buffer_idx, channel, input_h, input_w, stream);
