@@ -60,6 +60,7 @@ D-FINE(Transfomer object detection) training, onnx, tensorrt.
 * cd PATH/DFINE-onnx-tensorrt
 * /data/sunkx/TensorRT-10.4.0.26/bin/trtexec --onnx=./D-FINE/output/dfine_hgnetv2_s_custom/best_stg1.onnx --minShapes=images:1x3x640x640 --optShapes=images:4x3x640x640 --maxShapes=images:4x3x640x640 --saveEngine=best.engine --fp16
 * make
-* ./dfine_trt_inference ./best.engine ./test.jpg
+* ./dfine_trt_inference ./best.engine ./test.jpg picture
+* ./dfine_trt_inference ./best.engine ./test.mp4 video
 
 

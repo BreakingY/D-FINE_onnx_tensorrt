@@ -642,8 +642,7 @@ std::tuple<cv::Mat, float, float, float> Letterbox_resize(const cv::Mat& img,int
 
     return std::move(std::make_tuple(out, r, dw, dh));
 }
-std::tuple<float, float, float>  PreprocessImage(std::string path, void *buffer, int channel, int input_h, int input_w, cudaStream_t stream){
-    cv::Mat img = cv::imread(path);
+std::tuple<float, float, float>  PreprocessImage(cv::Mat &img, void *buffer, int channel, int input_h, int input_w, cudaStream_t stream){
     std::tuple<cv::Mat, float, float, float> res = Letterbox_resize(img, input_h, input_w);
     cv::Mat &res_mat = std::get<0>(res);
     float &r = std::get<1>(res);
@@ -726,8 +725,7 @@ std::tuple<float, float, float> Letterbox_resize_GPU(int orig_h, int orig_w, voi
 #endif
     return std::make_tuple(r, dw, dh);
 }
-std::tuple<float, float, float>  PreprocessImage_GPU(std::string path, void *buffer, int channel, int input_h, int input_w, cudaStream_t stream){
-    cv::Mat img = cv::imread(path);
+std::tuple<float, float, float>  PreprocessImage_GPU(cv::Mat &img, void *buffer, int channel, int input_h, int input_w, cudaStream_t stream){
     void *img_buffer = nullptr;
     int orig_h = img.rows;
     int orig_w = img.cols;
@@ -782,7 +780,7 @@ std::tuple<float, float, float>  PreprocessImage_GPU(std::string path, void *buf
     CUDA_CHECK(cudaFree(pu8_rgb));
     return std::move(std::make_tuple(r, dw, dh));
 }
-int Inference(nvinfer1::IExecutionContext* context, nvinfer1::ICudaEngine* engine, std::vector<std::pair<int, std::string>> in_tensor_info, std::vector<std::pair<int, std::string>> out_tensor_info,
+int Inference(nvinfer1::IExecutionContext* context, std::vector<std::pair<int, std::string>> in_tensor_info, std::vector<std::pair<int, std::string>> out_tensor_info,
               void**buffers, void** host_outs, const int batch_size, int channel, int input_h, int input_w, 
               int max_out0_size_byte, int max_out1_size_byte, int max_out2_size_byte, cudaStream_t stream){
     nvinfer1::Dims trt_in0_dims{}, trt_in1_dims{};
@@ -913,13 +911,172 @@ size_t CountElement(const nvinfer1::Dims &dims, int batch_zise)
     }
     return static_cast<size_t>(total);
 }
+int PictureInfer(cudaStream_t &stream, std::vector<std::pair<int, std::string>> &in_tensor_info, std::vector<std::pair<int, std::string>> &out_tensor_info,
+                nvinfer1::IExecutionContext* context, void* buffers[5], char *host_outs[3], size_t max_in0_size_byte, size_t max_in1_size_byte, 
+                size_t max_out0_size_byte, size_t max_out1_size_byte, size_t max_out2_size_byte, std::string path){
+    int test_batch = 2;
+    std::vector<std::tuple<float, float, float>> res_pre;
+    int buffer_idx = 0;
+    char* input_ptr_images = static_cast<char*>(buffers[in_tensor_info[0].first]);
+    char* input_ptr_orig_target_sizes = static_cast<char*>(buffers[in_tensor_info[1].first]);
+    nvinfer1::Dims in_dims = context->getTensorShape(in_tensor_info[0].second.c_str());
+    int channel = in_dims.d[1];
+    int input_h = in_dims.d[2];
+    int input_w = in_dims.d[3];
+    cv::Mat img = cv::imread(path);
+    for(int i = 0; i < test_batch; i++){
+#ifdef PROC_GPU
+        std::tuple<float, float, float> res = PreprocessImage_GPU(img, input_ptr_images + buffer_idx, channel, input_h, input_w, stream);
+#else
+        std::tuple<float, float, float> res = PreprocessImage(img, input_ptr_images + buffer_idx, channel, input_h, input_w, stream);
+#endif
+        buffer_idx += input_h * input_w * 3 * sizeof(float);
+        res_pre.push_back(res);
+        
+    }
+    // must be int64_t
+    int64_t img_size[2] = {(int64_t)input_h, (int64_t)input_w};
+    CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int64_t) * 2, cudaMemcpyHostToDevice, stream));
+    int fps_test_cnt = 10000;
+    auto start = std::chrono::high_resolution_clock::now();
+    for(int i = 0; i < fps_test_cnt; i++){
+        Inference(context, in_tensor_info, out_tensor_info, buffers, (void**)host_outs,
+              res_pre.size(), channel, input_h, input_w, max_out0_size_byte, max_out1_size_byte, max_out2_size_byte, stream);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    long long duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "fps: " << (double)(fps_test_cnt * test_batch) / ((double)duration / 1000) << " time: " << duration << "ms" << std::endl;
+    cv::Mat original = img;
+    int orig_h = original.rows, orig_w = original.cols;
+    int64_t  *output_labels = reinterpret_cast<int64_t  *>(host_outs[0]);
+    float *output_boxes = reinterpret_cast<float *>(host_outs[1]);
+    float *output_scores = reinterpret_cast<float *>(host_outs[2]);
+    for (int b = 0; b < test_batch; ++b) {
+        auto [r, dw, dh] = res_pre[b];
+        int64_t * feat_labels = output_labels + b * 300;
+        float* feat_boxes = output_boxes + b * 300 * 4;
+        float* feat_scores = output_scores + b * 300;
+
+        std::vector<Detection> dets = PostprocessDetections(
+            feat_labels, feat_boxes, feat_scores, 300, r, dw, dh, orig_w, orig_h, /*conf*/0.5f, /*iou*/0.5f);
+
+        cv::Mat vis = original.clone();
+        for (const auto& d : dets) {
+            cv::rectangle(vis, d.box, cv::Scalar(0, 255, 0), 2);
+            char text[128];
+            const char* cname = (d.class_id >= 0 && d.class_id < (int)(sizeof(class_names)/sizeof(class_names[0])))
+                                    ? class_names[d.class_id] : "cls";
+            snprintf(text, sizeof(text), "%s: %.2f", cname, d.score);
+            int baseline = 0;
+            cv::Size tsize = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+            cv::rectangle(vis, cv::Rect(cv::Point((int)d.box.x, (int)d.box.y - tsize.height - 4),
+                                        cv::Size(tsize.width + 4, tsize.height + 4)),
+                        cv::Scalar(0, 255, 0), cv::FILLED);
+            cv::putText(vis, text, cv::Point((int)d.box.x + 2, (int)d.box.y - 2),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+        }
+        std::string save_name = std::string("result_") + std::to_string(b) + ".jpg";
+        cv::imwrite(save_name, vis);
+        std::cout << "Saved: " << save_name << "  dets=" << dets.size() << std::endl;
+    }
+    return 0;
+}
+int VideoInfer(cudaStream_t &stream, std::vector<std::pair<int, std::string>> &in_tensor_info, std::vector<std::pair<int, std::string>> &out_tensor_info,
+                nvinfer1::IExecutionContext* context, void* buffers[5], char *host_outs[3], size_t max_in0_size_byte, size_t max_in1_size_byte, 
+                size_t max_out0_size_byte, size_t max_out1_size_byte, size_t max_out2_size_byte, std::string path){
+    int test_batch = 2;
+    cv::VideoCapture cap(path);
+    if (!cap.isOpened()) {
+        std::cerr << "无法打开视频文件" << std::endl;
+        return -1;
+    }
+    cv::Mat img;
+    cv::VideoWriter writer;
+    bool ready_flag = false;
+    const char* save_name = "output.mp4";
+    bool over_flag = false;
+    nvinfer1::Dims in_dims = context->getTensorShape(in_tensor_info[0].second.c_str());
+    int channel = in_dims.d[1];
+    int input_h = in_dims.d[2];
+    int input_w = in_dims.d[3];
+    while(!over_flag){
+        std::vector<std::tuple<float, float, float>> res_pre;
+        int buffer_idx = 0;
+        char* input_ptr_images = static_cast<char*>(buffers[in_tensor_info[0].first]);
+        char* input_ptr_orig_target_sizes = static_cast<char*>(buffers[in_tensor_info[1].first]);
+        for(int i = 0; i < test_batch; i++){  
+            bool ret = cap.read(img);
+            if(!ret){
+                std::cout << "视频读取完毕或出现错误" << std::endl;
+                over_flag = true;
+                break;
+            }
+#ifdef PROC_GPU
+            std::tuple<float, float, float> res = PreprocessImage_GPU(img, input_ptr_images + buffer_idx, channel, input_h, input_w, stream);
+#else
+            std::tuple<float, float, float> res = PreprocessImage(img, input_ptr_images + buffer_idx, channel, input_h, input_w, stream);
+#endif
+            buffer_idx += input_h * input_w * 3 * sizeof(float);
+            res_pre.push_back(res);
+        }
+        if(res_pre.empty()){
+            continue;
+        }
+        // must be int64_t
+        int64_t img_size[2] = {(int64_t)input_h, (int64_t)input_w};
+        CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int64_t) * 2, cudaMemcpyHostToDevice, stream));
+        Inference(context, in_tensor_info, out_tensor_info, buffers, (void**)host_outs,
+                res_pre.size(), channel, input_h, input_w, max_out0_size_byte, max_out1_size_byte, max_out2_size_byte, stream);
+        cv::Mat original = img;
+        int orig_h = original.rows, orig_w = original.cols;
+        if(!ready_flag){
+            writer.open(save_name, cv::VideoWriter::fourcc('m','p','4','v'), 30, cv::Size(orig_w, orig_h));
+            ready_flag = true;
+        }
+        int64_t  *output_labels = reinterpret_cast<int64_t  *>(host_outs[0]);
+        float *output_boxes = reinterpret_cast<float *>(host_outs[1]);
+        float *output_scores = reinterpret_cast<float *>(host_outs[2]);
+        for (int b = 0; b < res_pre.size(); ++b) {
+            auto [r, dw, dh] = res_pre[b];
+            int64_t * feat_labels = output_labels + b * 300;
+            float* feat_boxes = output_boxes + b * 300 * 4;
+            float* feat_scores = output_scores + b * 300;
+
+            std::vector<Detection> dets = PostprocessDetections(
+                feat_labels, feat_boxes, feat_scores, 300, r, dw, dh, orig_w, orig_h, /*conf*/0.5f, /*iou*/0.5f);
+
+            cv::Mat vis = original.clone();
+            for (const auto& d : dets) {
+                cv::rectangle(vis, d.box, cv::Scalar(0, 255, 0), 2);
+                char text[128];
+                const char* cname = (d.class_id >= 0 && d.class_id < (int)(sizeof(class_names)/sizeof(class_names[0])))
+                                        ? class_names[d.class_id] : "cls";
+                snprintf(text, sizeof(text), "%s: %.2f", cname, d.score);
+                int baseline = 0;
+                cv::Size tsize = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+                cv::rectangle(vis, cv::Rect(cv::Point((int)d.box.x, (int)d.box.y - tsize.height - 4),
+                                            cv::Size(tsize.width + 4, tsize.height + 4)),
+                            cv::Scalar(0, 255, 0), cv::FILLED);
+                cv::putText(vis, text, cv::Point((int)d.box.x + 2, (int)d.box.y - 2),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+            }
+            std::cout << " dets=" << dets.size() << std::endl;
+            writer.write(vis);
+        }
+    }
+    std::cout << "Saved: " << save_name << std::endl;
+    cap.release();
+    writer.release();
+    return 0;
+}
 int main(int argc, char **argv){
-    if(argc < 3){
-        std::cerr << "./bin eng_path test.jpg" << std::endl;
+    if(argc < 4){
+        std::cerr << "./bin eng_path test.jpg/test.mp4 picture/video" << std::endl;
         return 0;
     }
     const char *eng_path = argv[1];
-    const char *img_path = argv[2];
+    const char *media_path = argv[2];
+    std::string media_type = argv[3];
     int device_id = 0;
     cudaStream_t stream;
     CUDA_CHECK(cudaSetDevice(device_id));
@@ -1008,71 +1165,15 @@ int main(int argc, char **argv){
     context->setOutputTensorAddress(out_tensor_info[0].second.c_str(), buffers[out_tensor_info[0].first]);
     context->setOutputTensorAddress(out_tensor_info[1].second.c_str(), buffers[out_tensor_info[1].first]);
     context->setOutputTensorAddress(out_tensor_info[2].second.c_str(), buffers[out_tensor_info[2].first]);
-
-    int test_batch = 2;
-    std::vector<std::tuple<float, float, float>> res_pre;
-    int buffer_idx = 0;
-    char* input_ptr_images = static_cast<char*>(buffers[in_tensor_info[0].first]);
-    char* input_ptr_orig_target_sizes = static_cast<char*>(buffers[in_tensor_info[1].first]);
-    nvinfer1::Dims in_dims = context->getTensorShape(in_tensor_info[0].second.c_str());
-    int channel = in_dims.d[1];
-    int input_h = in_dims.d[2];
-    int input_w = in_dims.d[3];
-    for(int i = 0; i < test_batch; i++){
-#ifdef PROC_GPU
-        std::tuple<float, float, float> res = PreprocessImage_GPU(img_path, input_ptr_images + buffer_idx, channel, input_h, input_w, stream);
-#else
-        std::tuple<float, float, float> res = PreprocessImage(img_path, input_ptr_images + buffer_idx, channel, input_h, input_w, stream);
-#endif
-        buffer_idx += input_h * input_w * 3 * sizeof(float);
-        res_pre.push_back(res);
-        
-    }
-    // must be int64_t
-    int64_t img_size[2] = {(int64_t)input_h, (int64_t)input_w};
-    CUDA_CHECK(cudaMemcpyAsync(input_ptr_orig_target_sizes, img_size, sizeof(int64_t) * 2, cudaMemcpyHostToDevice, stream));
-    int fps_test_cnt = 10000;
-    auto start = std::chrono::high_resolution_clock::now();
-    for(int i = 0; i < fps_test_cnt; i++){
-        Inference(context, engine, in_tensor_info, out_tensor_info, buffers, (void**)host_outs,
-              res_pre.size(), channel, input_h, input_w, max_out0_size_byte, max_out1_size_byte, max_out2_size_byte, stream);
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    long long duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "fps: " << (double)(fps_test_cnt * test_batch) / ((double)duration / 1000) << " time: " << duration << "ms" << std::endl;
-    cv::Mat original = cv::imread(img_path);
-    int orig_h = original.rows, orig_w = original.cols;
-    int64_t  *output_labels = reinterpret_cast<int64_t  *>(host_outs[0]);
-    float *output_boxes = reinterpret_cast<float *>(host_outs[1]);
-    float *output_scores = reinterpret_cast<float *>(host_outs[2]);
-    for (int b = 0; b < test_batch; ++b) {
-        auto [r, dw, dh] = res_pre[b];
-        int64_t * feat_labels = output_labels + b * 300;
-        float* feat_boxes = output_boxes + b * 300 * 4;
-        float* feat_scores = output_scores + b * 300;
-
-        std::vector<Detection> dets = PostprocessDetections(
-            feat_labels, feat_boxes, feat_scores, 300, r, dw, dh, orig_w, orig_h, /*conf*/0.5f, /*iou*/0.5f);
-
-        cv::Mat vis = original.clone();
-        for (const auto& d : dets) {
-            cv::rectangle(vis, d.box, cv::Scalar(0, 255, 0), 2);
-            char text[128];
-            const char* cname = (d.class_id >= 0 && d.class_id < (int)(sizeof(class_names)/sizeof(class_names[0])))
-                                    ? class_names[d.class_id] : "cls";
-            snprintf(text, sizeof(text), "%s: %.2f", cname, d.score);
-            int baseline = 0;
-            cv::Size tsize = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
-            cv::rectangle(vis, cv::Rect(cv::Point((int)d.box.x, (int)d.box.y - tsize.height - 4),
-                                        cv::Size(tsize.width + 4, tsize.height + 4)),
-                        cv::Scalar(0, 255, 0), cv::FILLED);
-            cv::putText(vis, text, cv::Point((int)d.box.x + 2, (int)d.box.y - 2),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
-        }
-        std::string save_name = std::string("result_") + std::to_string(b) + ".jpg";
-        cv::imwrite(save_name, vis);
-        std::cout << "Saved: " << save_name << "  dets=" << dets.size() << std::endl;
-    }
+    if(media_type == std::string("picture"))
+        PictureInfer(stream, in_tensor_info, out_tensor_info, context, buffers, host_outs, 
+                    max_in0_size_byte, max_in1_size_byte, max_out0_size_byte, max_out1_size_byte, max_out2_size_byte, media_path);
+    else if(media_type == std::string("video"))
+        VideoInfer(stream, in_tensor_info, out_tensor_info, context, buffers, host_outs, 
+                    max_in0_size_byte, max_in1_size_byte, max_out0_size_byte, max_out1_size_byte, max_out2_size_byte, media_path);
+    else
+        std::cout << "must be picture or video" << std::endl;
+    
     for(int i = 0; i < 5; i++){
         CUDA_CHECK(cudaFree(buffers[i]));
     }
